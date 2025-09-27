@@ -1,5 +1,6 @@
 package ani.dantotsu.settings.paging
 
+// Android imports
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import android.view.animation.LinearInterpolator
@@ -7,35 +8,27 @@ import android.widget.ImageView
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import androidx.paging.Pager
-import androidx.paging.PagingConfig
-import androidx.paging.PagingData
-import androidx.paging.PagingDataAdapter
-import androidx.paging.PagingSource
-import androidx.paging.PagingState
-import androidx.paging.cachedIn
+import androidx.paging.*
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
+
+// Project imports
 import ani.dantotsu.R
 import ani.dantotsu.databinding.ItemExtensionAllBinding
 import ani.dantotsu.others.LanguageMapper
 import ani.dantotsu.settings.saving.PrefManager
 import ani.dantotsu.settings.saving.PrefName
+
+// Glide
 import com.bumptech.glide.Glide
+
+// Manga extension
 import eu.kanade.tachiyomi.extension.manga.MangaExtensionManager
 import eu.kanade.tachiyomi.extension.manga.model.MangaExtension
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+
+// Coroutines
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 
 @Suppress("UNCHECKED_CAST")
 class MangaExtensionsViewModelFactory(
@@ -49,6 +42,7 @@ class MangaExtensionsViewModelFactory(
 class MangaExtensionsViewModel(
     mangaExtensionManager: MangaExtensionManager
 ) : ViewModel() {
+
     private val searchQuery = MutableStateFlow("")
     private var currentPagingSource: MangaExtensionPagingSource? = null
 
@@ -60,28 +54,27 @@ class MangaExtensionsViewModel(
         currentPagingSource?.invalidate()
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    val pagerFlow: Flow<PagingData<MangaExtension.Available>> = combine(
-        mangaExtensionManager.availableExtensionsFlow,
-        mangaExtensionManager.installedExtensionsFlow,
-        searchQuery
-    ) { available, installed, query ->
-        Triple(available, installed, query)
-    }.flatMapLatest { (available, installed, query) ->
-        Pager(
-            PagingConfig(
-                pageSize = 15,
-                initialLoadSize = 15,
-                prefetchDistance = 15
-            )
-        ) {
-            val mEPS = MangaExtensionPagingSource(available, installed, query)
-            currentPagingSource = mEPS
-            mEPS
-        }.flow
-    }.cachedIn(viewModelScope)
+    val pagerFlow: Flow<PagingData<MangaExtension.Available>> =
+        combine(
+            mangaExtensionManager.availableExtensionsFlow,
+            mangaExtensionManager.installedExtensionsFlow,
+            searchQuery
+        ) { available, installed, query ->
+            Triple(available, installed, query)
+        }.flatMapLatest { (available, installed, query) ->
+            Pager(
+                PagingConfig(
+                    pageSize = 15,
+                    initialLoadSize = 15,
+                    prefetchDistance = 15
+                )
+            ) {
+                val mEPS = MangaExtensionPagingSource(available, installed, query)
+                currentPagingSource = mEPS
+                mEPS
+            }.flow
+        }.cachedIn(viewModelScope)
 }
-
 
 class MangaExtensionPagingSource(
     private val availableExtensionsFlow: List<MangaExtension.Available>,
@@ -92,37 +85,43 @@ class MangaExtensionPagingSource(
     override suspend fun load(params: LoadParams<Int>): LoadResult<Int, MangaExtension.Available> {
         val position = params.key ?: 0
         val installedExtensions = installedExtensionsFlow.map { it.pkgName }.toSet()
-        val availableExtensions =
-            availableExtensionsFlow.filterNot { it.pkgName in installedExtensions }
+
+        val availableExtensions = availableExtensionsFlow.filterNot {
+            it.pkgName in installedExtensions
+        }
+
         val query = searchQuery
         val isNsfwEnabled: Boolean = PrefManager.getVal(PrefName.NSFWExtension)
+
         val filteredExtensions = if (query.isEmpty()) {
             availableExtensions
         } else {
             availableExtensions.filter { it.name.contains(query, ignoreCase = true) }
         }
+
         val lang: String = PrefManager.getVal(PrefName.LangSort)
         val langFilter =
             if (lang != "all") filteredExtensions.filter { it.lang == lang } else filteredExtensions
-        val filternfsw = if (isNsfwEnabled) langFilter else langFilter.filterNot { it.isNsfw }
+
+        val filterNsfw =
+            if (isNsfwEnabled) langFilter else langFilter.filterNot { it.isNsfw }
+
         return try {
-            val sublist = filternfsw.subList(
+            val sublist = filterNsfw.subList(
                 fromIndex = position,
-                toIndex = (position + params.loadSize).coerceAtMost(filternfsw.size)
+                toIndex = (position + params.loadSize).coerceAtMost(filterNsfw.size)
             )
             LoadResult.Page(
                 data = sublist,
                 prevKey = if (position == 0) null else position - params.loadSize,
-                nextKey = if (position + params.loadSize >= filternfsw.size) null else position + params.loadSize
+                nextKey = if (position + params.loadSize >= filterNsfw.size) null else position + params.loadSize
             )
         } catch (e: Exception) {
             LoadResult.Error(e)
         }
     }
 
-    override fun getRefreshKey(state: PagingState<Int, MangaExtension.Available>): Int? {
-        return null
-    }
+    override fun getRefreshKey(state: PagingState<Int, MangaExtension.Available>): Int? = null
 }
 
 class MangaExtensionAdapter(private val clickListener: OnMangaInstallClickListener) :
@@ -137,16 +136,12 @@ class MangaExtensionAdapter(private val clickListener: OnMangaInstallClickListen
             override fun areItemsTheSame(
                 oldItem: MangaExtension.Available,
                 newItem: MangaExtension.Available
-            ): Boolean {
-                return oldItem.pkgName == newItem.pkgName
-            }
+            ): Boolean = oldItem.pkgName == newItem.pkgName
 
             override fun areContentsTheSame(
                 oldItem: MangaExtension.Available,
                 newItem: MangaExtension.Available
-            ): Boolean {
-                return oldItem == newItem
-            }
+            ): Boolean = oldItem == newItem
         }
     }
 
@@ -157,15 +152,15 @@ class MangaExtensionAdapter(private val clickListener: OnMangaInstallClickListen
     }
 
     override fun onBindViewHolder(holder: MangaExtensionViewHolder, position: Int) {
-        val extension = getItem(position)
-        if (extension != null) {
-            if (!skipIcons) {
-                Glide.with(holder.itemView.context)
-                    .load(extension.iconUrl)
-                    .into(holder.extensionIconImageView)
-            }
-            holder.bind(extension)
+        val extension = getItem(position) ?: return
+
+        if (!skipIcons) {
+            Glide.with(holder.itemView.context)
+                .load(extension.iconUrl)
+                .into(holder.extensionIconImageView)
         }
+
+        holder.bind(extension)
     }
 
     inner class MangaExtensionViewHolder(private val binding: ItemExtensionAllBinding) :
@@ -177,21 +172,21 @@ class MangaExtensionAdapter(private val clickListener: OnMangaInstallClickListen
         init {
             binding.closeTextView.setOnClickListener {
                 if (bindingAdapterPosition == RecyclerView.NO_POSITION) return@setOnClickListener
-                val extension = getItem(bindingAdapterPosition)
-                if (extension != null) {
-                    clickListener.onInstallClick(extension)
-                    binding.closeTextView.setImageResource(R.drawable.ic_sync)
-                    scope.launch {
-                        while (isActive) {
-                            withContext(Dispatchers.Main) {
-                                binding.closeTextView.animate()
-                                    .rotationBy(360f)
-                                    .setDuration(1000)
-                                    .setInterpolator(LinearInterpolator())
-                                    .start()
-                            }
-                            delay(1000)
+                val extension = getItem(bindingAdapterPosition) ?: return@setOnClickListener
+
+                clickListener.onInstallClick(extension)
+                binding.closeTextView.setImageResource(R.drawable.ic_sync)
+
+                scope.launch {
+                    while (isActive) {
+                        withContext(Dispatchers.Main) {
+                            binding.closeTextView.animate()
+                                .rotationBy(360f)
+                                .setDuration(1000)
+                                .setInterpolator(LinearInterpolator())
+                                .start()
                         }
+                        delay(1000)
                     }
                 }
             }
@@ -203,12 +198,11 @@ class MangaExtensionAdapter(private val clickListener: OnMangaInstallClickListen
             val nsfw = if (extension.isNsfw) "(18+)" else ""
             val lang = LanguageMapper.getLanguageName(extension.lang)
             binding.extensionNameTextView.text = extension.name
-            val versionText = "$lang ${extension.versionName} $nsfw"
-            binding.extensionVersionTextView.text = versionText
+            binding.extensionVersionTextView.text = "$lang ${extension.versionName} $nsfw"
         }
 
         fun clear() {
-            job.cancel() // Cancel the coroutine when the view is recycled
+            job.cancel() // Cancel coroutine when view is recycled
         }
     }
 
